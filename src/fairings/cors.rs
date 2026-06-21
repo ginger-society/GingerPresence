@@ -13,13 +13,19 @@ impl Fairing for CORS {
         }
     }
 
-    async fn on_response<'r>(&self, _request: &'r Request<'_>, response: &mut Response<'r>) {
+    async fn on_response<'r>(&self, request: &'r Request<'_>, response: &mut Response<'r>) {
         response.set_header(Header::new("Access-Control-Allow-Origin", "*"));
         response.set_header(Header::new(
             "Access-Control-Allow-Methods",
-            "POST, GET, PATCH, OPTIONS",
+            "POST, GET, PATCH, OPTIONS, PUT",
         ));
         response.set_header(Header::new("Access-Control-Allow-Headers", "*"));
         response.set_header(Header::new("Access-Control-Allow-Credentials", "true"));
+
+        // Handle preflight (OPTIONS) requests
+        if request.method() == rocket::http::Method::Options {
+            response.set_status(rocket::http::Status::Ok);
+            response.set_header(Header::new("Access-Control-Max-Age", "86400"));
+        }
     }
 }

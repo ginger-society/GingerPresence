@@ -6,13 +6,15 @@ use mongodb::{Client, Database};
 use rocket::fairing::AdHoc;
 use std::env;
 
-pub mod customer;
 pub mod redis;
 
-pub fn init() -> AdHoc {
+pub fn connect_mongo(mongo_uri: String, mongo_db_name: String) -> AdHoc {
     AdHoc::on_ignite("Connecting to MongoDB", |rocket| async {
-        match connect().await {
-            Ok(database) => rocket.manage(database),
+        match connect(mongo_uri, mongo_db_name).await {
+            Ok(database) => {
+                print!("Connected to mongo");
+                rocket.manage(database)
+            }
             Err(error) => {
                 panic!("Cannot connect to instance:: {:?}", error)
             }
@@ -20,10 +22,7 @@ pub fn init() -> AdHoc {
     })
 }
 
-async fn connect() -> mongodb::error::Result<Database> {
-    let mongo_uri = env::var("MONGO_URI").expect("MONGO_URI is not found.");
-    let mongo_db_name = env::var("MONGO_DB_NAME").expect("MONGO_DB_NAME is not found.");
-
+async fn connect(mongo_uri: String, mongo_db_name: String) -> mongodb::error::Result<Database> {
     let client_options = ClientOptions::parse(mongo_uri).await?;
     let client = Client::with_options(client_options)?;
     let database = client.database(mongo_db_name.as_str());
@@ -38,6 +37,7 @@ pub fn connect_rdb() -> r2d2::Pool<ConnectionManager<PgConnection>> {
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     let manager = ConnectionManager::<PgConnection>::new(database_url);
     r2d2::Pool::builder()
+        .max_size(2)
         .build(manager)
         .expect("Failed to create pool.")
 }

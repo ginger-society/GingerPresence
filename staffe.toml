@@ -1,8 +1,0 @@
-[package]
-kind = "RustBin"
-lang = "Rust"
-version = "0.0.0"
-
-[db_schema]
-kind = "rust-diesel"
-root = "src/models"

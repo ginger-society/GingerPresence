@@ -1,29 +1,13 @@
 version: '3'
 services:
-  mongodb_container:
-    image: mongo:latest
-    environment:
-      MONGO_INITDB_ROOT_USERNAME: root
-      MONGO_INITDB_ROOT_PASSWORD: rootpassword
-    ports:
-      - 27017:27017
-    volumes:
-      - mongodb_data_container:/data/db
-  # rocket:
-  #   container_name: rocket
-  #   network_mode: "host"
-  #   ipc: "host"
-  #   build:
-  #     context: .
-  #     dockerfile: Dockerfile
-  #   command: /bin/sh -c "while sleep 1000; do :; done"
-  #   volumes:
-  #     - ./:/app
-  #     - ~/.gitconfig:/etc/gitconfig
-  #     - ~/.ssh:/root/.ssh
-  #     - /var/run/docker.sock:/var/run/docker.sock
-  #   depends_on:
-  #     - mongodb_container
-
-volumes:
-  mongodb_data_container:
+  estonia-redis:
+        image: redis:7-alpine
+        restart: always
+        command: ["redis-server", "--save", "", "--appendonly", "no"]
+        healthcheck:
+            test: ["CMD", "redis-cli", "ping"]
+            interval: 1s
+            timeout: 3s
+            retries: 50
+        ports:
+            - 6380:6379

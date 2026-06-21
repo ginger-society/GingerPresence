@@ -1,30 +1,41 @@
-use r2d2_redis::{r2d2::Pool, RedisConnectionManager};
-use std::ops::Deref;
+// src/db/redis.rs
 
-// Define a type alias for your Redis connection pool
-type RedisPool = Pool<RedisConnectionManager>;
+use std::sync::Arc;
 
-// Function to create and return a Redis connection pool
-pub fn create_redis_pool(redis_url: &str) -> RedisPool {
-    // Create a Redis connection manager
-    let manager = RedisConnectionManager::new(redis_url).unwrap();
+/// Async Redis pool — really a cheaply-cloneable connection manager that
+/// auto-reconnects under the hood. Matches the convention used by the
+/// notification-broker reference: `Arc<redis::aio::ConnectionManager>`,
+/// cloned per-operation via `(*pool).clone()`.
+pub type RedisPool = Arc<redis::aio::ConnectionManager>;
 
-    // Create a pool with the manager
-    Pool::builder()
-        .max_size(15) // Set the maximum number of connections in the pool
-        .build(manager)
-        .unwrap()
-}
+/// Create and return an async Redis connection pool.
+pub async fn create_redis_pool(redis_url: String) -> RedisPool {
+    let client = match redis::Client::open(redis_url) {
+        Ok(c) => c,
+        Err(e) => {
+            println!("Invalid Redis URL: {:?}", e);
+            std::process::exit(1);
+        }
+    };
 
-// Rocket State to manage the Redis pool
-#[derive(Debug)]
-pub struct RedisPoolState(pub RedisPool);
+    let manager = match redis::aio::ConnectionManager::new(client).await {
+        Ok(manager) => manager,
+        Err(e) => {
+            println!("Failed to connect to redis: {:?}", e);
+            std::process::exit(1);
+        }
+    };
 
-// Implement Deref for RedisPoolState to access the pool easily
-impl Deref for RedisPoolState {
-    type Target = RedisPool;
+    // enable keyspace notifications for expired events — required for
+    // heartbeat::start_expiry_watcher to receive __keyevent@0__:expired.
+    // "Ex" = keyspace events (E) for expired keys (x).
+    let mut conn = manager.clone();
+    let _: Result<(), _> = redis::cmd("CONFIG")
+        .arg("SET")
+        .arg("notify-keyspace-events")
+        .arg("Ex")
+        .query_async(&mut conn)
+        .await;
 
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
+    Arc::new(manager)
 }

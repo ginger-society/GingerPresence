@@ -1,0 +1,23 @@
+lang = "Rust"
+organization_id = "ginger-society"
+dir = "."
+spec_url = "/openapi.json"
+service_type = "RPCEndpoint"
+
+[services."@ginger-society/IAMService"]
+stage = "https://api-staging.gingersociety.org/iam"
+dev = "http://localhost:8080/iam"
+stage_k8 = "http://iam-service-api-service/iam"
+
+[portals_refs]
+
+[ws_refs]
+
+[urls]
+stage_k8 = "http://ginger-presence-service/presence"
+stage = "http://localhost:8089/presence"
+prod = "http://localhost:8089/presence"
+prod_k8 = "http://localhost:8089/presence"
+dev = "http://localhost:8089/presence"
+
+[urls_ws]
