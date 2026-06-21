@@ -5,6 +5,7 @@ use rocket_okapi::openapi;
 
 use crate::wamp_client::SharedWampClient;
 pub mod available_devices;
+pub mod channel_status;
 
 #[openapi()]
 #[get("/")]

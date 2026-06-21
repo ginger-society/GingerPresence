@@ -56,6 +56,7 @@ async fn main() {
             openapi_get_routes![routes::index, 
             routes::available_devices::available_devices,
             routes::available_devices::available_devices_by_capability,
+            routes::channel_status::channel_status
             ],
         )
         .mount(
