@@ -6,6 +6,7 @@
 // Redis layout:
 //   {device_channel}_capability   -> JSON array of capability strings
 //   {device_channel}_last_seen    -> timestamp string, TTL = HEARTBEAT_TTL_SECS
+//   metrics_{device_channel}      -> Prometheus text-exposition blob, TTL = METRICS_TTL_SECS
 //   available_devices             -> Redis SET of device_channel strings
 //
 // When a `{device_channel}_last_seen` key expires, Redis emits an `expired`
@@ -25,9 +26,20 @@ use crate::wamp_client::SharedWampClient;
 /// more often than this or they're considered gone.
 const HEARTBEAT_TTL_SECS: u64 = 15;
 
+/// The scrape_interval a Prometheus server would typically be configured
+/// with (the standard default). Used only to size METRICS_TTL_SECS below —
+/// unrelated to how often the device itself sends heartbeats.
+const PROMETHEUS_SCRAPE_INTERVAL_SECS: u64 = 15;
+
+/// TTL for the stored `metrics_*` blob: 1.5x the scrape interval, rounded
+/// up, so the key can't expire between two consecutive scrapes even if one
+/// lands a little late.
+const METRICS_TTL_SECS: u64 = (PROMETHEUS_SCRAPE_INTERVAL_SECS * 3 + 1) / 2;
+
 const AVAILABLE_DEVICES_KEY: &str = "available_devices";
 const LAST_SEEN_SUFFIX: &str = "_last_seen";
 const CAPABILITY_SUFFIX: &str = "_capability";
+pub const METRICS_PREFIX: &str = "metrics_";
 
 /// Register the `handle_heartbeat` RPC on the given WAMP client.
 ///
@@ -35,9 +47,12 @@ const CAPABILITY_SUFFIX: &str = "_capability";
 /// ```json
 /// {
 ///   "device_channel": "presence-abc_rackmint",
-///   "capabilities": ["gpu", "camera"]
+///   "capabilities": ["gpu", "camera"],
+///   "metrics_text": "# HELP node_cpu_usage_percent ...\n# TYPE node_cpu_usage_percent gauge\n..."
 /// }
 /// ```
+/// `metrics_text` is optional — only present when the sending device has
+/// the "metrics" capability enabled.
 pub async fn register_heartbeat_handler(wamp_client: &SharedWampClient, redis_pool: RedisPool) {
     wamp_client
         .register("handle_heartbeat", move |_args, kwargs| {
@@ -70,6 +85,10 @@ async fn handle_heartbeat(kwargs: Option<Value>, redis_pool: RedisPool) -> Resul
         .map_err(|e| serde_json::json!({"error": e.to_string()}))?;
     let now = chrono::Utc::now().to_rfc3339();
 
+    // metrics_text is optional — the client only sends it when its
+    // "metrics" capability is enabled
+    let metrics_text = kwargs.get("metrics_text").and_then(|v| v.as_str());
+
     let mut conn = (*redis_pool).clone();
 
     // add/update capability key (no expiry — only last_seen expires)
@@ -86,6 +105,17 @@ async fn handle_heartbeat(kwargs: Option<Value>, redis_pool: RedisPool) -> Resul
     conn.sadd::<_, _, ()>(AVAILABLE_DEVICES_KEY, &device_channel)
         .await
         .map_err(|e| serde_json::json!({"error": e.to_string()}))?;
+
+    // store the Prometheus-format metrics blob, if the device sent one —
+    // TTL'd independently of last_seen so a stale metrics scrape can't
+    // outlive the device being marked gone, but also doesn't need to be
+    // refreshed on every single heartbeat if metrics lag behind slightly
+    if let Some(metrics_text) = metrics_text {
+        let metrics_key = format!("{}{}", METRICS_PREFIX, device_channel);
+        conn.set_ex::<_, _, ()>(&metrics_key, metrics_text, METRICS_TTL_SECS)
+            .await
+            .map_err(|e| serde_json::json!({"error": e.to_string()}))?;
+    }
 
     Ok(serde_json::json!({"status": "ok"}))
 }
@@ -179,10 +209,12 @@ pub fn start_expiry_watcher(redis_url: String, redis_pool: RedisPool) {
 
 async fn cleanup_device(redis_pool: &RedisPool, device_channel: &str) -> redis::RedisResult<()> {
     let capability_key = format!("{}{}", device_channel, CAPABILITY_SUFFIX);
+    let metrics_key = format!("{}{}", METRICS_PREFIX, device_channel);
     let mut conn = (**redis_pool).clone();
 
     conn.srem::<_, _, ()>(AVAILABLE_DEVICES_KEY, device_channel).await?;
     conn.del::<_, ()>(&capability_key).await?;
+    conn.del::<_, ()>(&metrics_key).await?;
 
     Ok(())
 }

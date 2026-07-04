@@ -69,6 +69,7 @@ async fn main() {
         .mount(format!("/{}/metrics", SERVICE_PREFIX), prometheus)
         .mount("/", routes![
             routes::stream_counter,   // SSE routes go here, outside openapi
+            routes::available_devices::device_metrics, // SSE routes go here, outside openapi
         ]);
 
     server = server.manage(wamp_client.clone());

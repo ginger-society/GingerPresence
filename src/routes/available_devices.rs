@@ -7,6 +7,7 @@ use rocket_okapi::openapi;
 use serde::Serialize;
 
 use crate::db::redis::RedisPool;
+use crate::handlers::heartbeat::METRICS_PREFIX;
 
 const AVAILABLE_DEVICES_KEY: &str = "available_devices";
 const CAPABILITY_SUFFIX: &str = "_capability";
@@ -127,4 +128,74 @@ pub async fn available_devices_by_capability(
         .collect();
 
     Json(result)
+}
+
+
+// src/routes/device_metrics.rs
+//
+// Prometheus-compatible scrape endpoint for a single device.
+//
+// Point a Prometheus `scrape_config` at this per device, e.g.:
+//
+//   scrape_configs:
+//     - job_name: 'ginger-devices'
+//       metrics_path: /device-metrics/presence-abc_rackmint
+//       static_configs:
+//         - targets: ['your-host:your-port']
+//
+// The response body is exactly what the device sent in `metrics_text` on
+// its last heartbeat (see handlers/heartbeat.rs), forwarded byte-for-byte
+// with the standard Prometheus exposition content type. Nothing here
+// re-parses or re-encodes the blob — it was already valid Prometheus text
+// when the device produced it.
+
+use rocket::http::{Header, Status};
+use rocket::response::{self, Responder, Response};
+use std::io::Cursor;
+
+
+
+/// Wraps a raw Prometheus text body so it's served with the exact content
+/// type Prometheus scrapers expect (`text/plain; version=0.0.4;
+/// charset=utf-8`), rather than Rocket's default text/plain.
+pub struct PrometheusText(String);
+
+impl<'r> Responder<'r, 'static> for PrometheusText {
+    fn respond_to(self, _req: &rocket::Request) -> response::Result<'static> {
+        Response::build()
+            .header(Header::new(
+                "Content-Type",
+                "text/plain; version=0.0.4; charset=utf-8",
+            ))
+            .sized_body(self.0.len(), Cursor::new(self.0))
+            .ok()
+    }
+}
+
+/// Serves the most recently stored metrics blob for `channel_id`.
+///
+/// 404 if the device has never sent metrics, doesn't have the "metrics"
+/// capability enabled, or its `metrics_*` key has expired (device is gone
+/// or hasn't heartbeated with metrics recently enough) — Prometheus will
+/// correctly mark the scrape target "down" rather than seeing a false
+/// empty-but-healthy response.
+///
+/// Not wrapped in #[openapi()]: a raw Prometheus text body isn't a
+/// JSON-schema-able response, so this belongs in the plain `routes![...]`
+/// list rather than `openapi_get_routes![...]`.
+#[get("/device-metrics/<channel_id>")]
+pub async fn device_metrics(
+    redis_pool: &State<RedisPool>,
+    channel_id: String,
+) -> Result<PrometheusText, Status> {
+    let mut conn: redis::aio::ConnectionManager = (***redis_pool).clone();
+
+    let metrics_key = format!("{}{}", METRICS_PREFIX, channel_id);
+
+    let metrics_text: Option<String> = conn.get(&metrics_key).await.map_err(|e| {
+        eprintln!("[device-metrics] get failed for '{}': {:?}", channel_id, e);
+        Status::InternalServerError
+    })?;
+
+    metrics_text.map(PrometheusText).ok_or(Status::NotFound)
 }
